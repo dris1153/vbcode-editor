@@ -412,7 +412,7 @@ export class CodeApplication extends Disposable {
 
 			// Mac only event: open new window when we get activated
 			if (!hasVisibleWindows) {
-				if ((process as INodeProcess).isEmbeddedApp || (this.environmentMainService.args['sessions'] && this.productService.quality !== 'stable')) {
+				if (this.productService.quality !== 'stable' && ((process as INodeProcess).isEmbeddedApp || this.environmentMainService.args['sessions'])) {
 					await this.windowsMainService?.openSessionsWindow({ context: OpenContext.DOCK });
 				} else {
 					await this.windowsMainService?.openEmptyWindow({ context: OpenContext.DOCK });
@@ -905,7 +905,7 @@ export class CodeApplication extends Disposable {
 		this.logService.trace('app#handleProtocolUrl():', uri.toString(true), options);
 
 		// Sessions app: ensure the sessions window is open, then let other handlers process the URL.
-		if ((process as INodeProcess).isEmbeddedApp) {
+		if (this.productService.quality !== 'stable' && (process as INodeProcess).isEmbeddedApp) {
 			this.logService.trace('app#handleProtocolUrl() sessions app handling protocol URL:', uri.toString(true));
 
 			// Skip window openables (file/folder/workspace) for security
@@ -1358,8 +1358,8 @@ export class CodeApplication extends Disposable {
 		const context = isLaunchedFromCli(process.env) ? OpenContext.CLI : OpenContext.DESKTOP;
 		const args = this.environmentMainService.args;
 
-		// Handle sessions window first based on context
-		if ((process as INodeProcess).isEmbeddedApp || (args['sessions'] && this.productService.quality !== 'stable')) {
+		// Handle sessions window based on context (skip if quality is stable)
+		if (this.productService.quality !== 'stable' && ((process as INodeProcess).isEmbeddedApp || args['sessions'])) {
 			return windowsMainService.openSessionsWindow({ context, contextWindowId: undefined });
 		}
 

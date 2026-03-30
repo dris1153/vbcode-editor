@@ -56,7 +56,7 @@ const multiAgentViewContainer = Registry.as<IViewContainersRegistry>(ViewExtensi
 		icon: multiAgentViewIcon,
 		order: 8,
 		hideIfEmpty: false,
-	}, ViewContainerLocation.ChatBar, { doNotRegisterOpenCommand: false });
+	}, ViewContainerLocation.Sidebar, { doNotRegisterOpenCommand: false });
 
 // --- Views ---
 Registry.as<IViewsRegistry>(ViewExtensions.ViewsRegistry).registerViews([
@@ -99,18 +99,20 @@ class MultiAgentAutoRegisterContribution extends Disposable {
 	) {
 		super();
 
-		// Auto-register when agents are spawned
-		this._register(this._agentLaneService.onDidChangeInstances((instance) => {
-			if (instance && !this._registrations.has(instance.id)) {
-				// New agent spawned — register as chat participant
-				const registration = this._chatBridge.registerAgent(instance.definitionId, instance.id);
-				this._registrations.set(instance.id, registration);
-			}
-		}));
-
-		// Auto-unregister when agents are terminated (instance = undefined means removal)
+		// Single listener: register new agents, unregister removed ones
 		this._register(this._agentLaneService.onDidChangeInstances(() => {
-			const activeIds = new Set(this._agentLaneService.getAgentInstances().map(i => i.id));
+			const activeInstances = this._agentLaneService.getAgentInstances();
+			const activeIds = new Set(activeInstances.map(i => i.id));
+
+			// Register new agents
+			for (const instance of activeInstances) {
+				if (!this._registrations.has(instance.id)) {
+					const registration = this._chatBridge.registerAgent(instance.definitionId, instance.id);
+					this._registrations.set(instance.id, registration);
+				}
+			}
+
+			// Unregister removed agents
 			for (const [id, registration] of this._registrations) {
 				if (!activeIds.has(id)) {
 					registration.dispose();
@@ -118,6 +120,15 @@ class MultiAgentAutoRegisterContribution extends Disposable {
 				}
 			}
 		}));
+
+		// Auto-spawn built-in agents so they're @mentionable immediately
+		for (const def of this._agentLaneService.getBuiltInAgents()) {
+			try {
+				this._agentLaneService.spawnAgent(def.id);
+			} catch {
+				// Ignore if max agents reached
+			}
+		}
 	}
 
 	override dispose(): void {
@@ -145,14 +156,7 @@ CommandsRegistry.registerCommand(COMMAND_OPEN_AGENT_LANES, async (accessor) => {
 	await viewsService.openView(AgentLanesViewPane.ID, true);
 });
 
-CommandsRegistry.registerCommand(COMMAND_CREATE_AGENT, async (accessor) => {
-	const wizard = new AgentCreationWizard(
-		accessor.get(IQuickInputService),
-		accessor.get(IAgentLaneService),
-		accessor.get(IMultiAgentProviderService),
-	);
-	await wizard.run();
-});
+// COMMAND_CREATE_AGENT is registered via registerAction2 (AddAgentAction) below
 
 // --- Keybindings ---
 KeybindingsRegistry.registerKeybindingRule({
@@ -171,6 +175,59 @@ KeybindingsRegistry.registerKeybindingRule({
 	handler: (accessor) => {
 		accessor.get(ICommandService).executeCommand(COMMAND_OPEN_AGENT_LANES);
 	},
+});
+
+// --- View Title Toolbar Actions ---
+import { Action2, MenuId, registerAction2 } from '../../../../platform/actions/common/actions.js';
+import { ContextKeyExpr } from '../../../../platform/contextkey/common/contextkey.js';
+import { ServicesAccessor } from '../../../../platform/instantiation/common/instantiation.js';
+
+const COMMAND_STOP_ALL_AGENTS = 'workbench.action.multiAgent.stopAllAgents';
+
+registerAction2(class AddAgentAction extends Action2 {
+	constructor() {
+		super({
+			id: COMMAND_CREATE_AGENT,
+			title: localize2('addAgent', "Add Agent"),
+			icon: Codicon.add,
+			menu: [{
+				id: MenuId.ViewTitle,
+				group: 'navigation',
+				when: ContextKeyExpr.equals('view', AgentLanesViewPane.ID),
+				order: 1,
+			}],
+		});
+	}
+	run(accessor: ServicesAccessor) {
+		const wizard = new AgentCreationWizard(
+			accessor.get(IQuickInputService),
+			accessor.get(IAgentLaneService),
+			accessor.get(IMultiAgentProviderService),
+		);
+		return wizard.run();
+	}
+});
+
+registerAction2(class StopAllAgentsAction extends Action2 {
+	constructor() {
+		super({
+			id: COMMAND_STOP_ALL_AGENTS,
+			title: localize2('stopAllAgents', "Stop All Agents"),
+			icon: Codicon.debugStop,
+			menu: [{
+				id: MenuId.ViewTitle,
+				group: 'navigation',
+				when: ContextKeyExpr.equals('view', AgentLanesViewPane.ID),
+				order: 2,
+			}],
+		});
+	}
+	run(accessor: ServicesAccessor) {
+		const agentLaneService = accessor.get(IAgentLaneService);
+		for (const instance of agentLaneService.getAgentInstances()) {
+			agentLaneService.terminateAgent(instance.id);
+		}
+	}
 });
 
 // --- Configuration ---
@@ -217,6 +274,13 @@ Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).regis
 			type: 'boolean',
 			default: true,
 			description: localize('multiAgent.orchestrator.enabled', 'Enable orchestrator for automatic task decomposition and delegation'),
+			scope: ConfigurationScope.APPLICATION,
+		},
+		'multiAgent.quotaRefreshInterval': {
+			type: 'number',
+			default: 60000,
+			minimum: 10000,
+			description: localize('multiAgent.quotaRefreshInterval', 'Quota refresh interval in milliseconds (default: 60 seconds)'),
 			scope: ConfigurationScope.APPLICATION,
 		},
 	},

@@ -3,6 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import './media/multiAgent.css';
 import { DisposableStore } from '../../../../base/common/lifecycle.js';
 import { IViewPaneOptions, ViewPane } from '../../../browser/parts/views/viewPane.js';
 import { IKeybindingService } from '../../../../platform/keybinding/common/keybinding.js';
@@ -12,7 +13,7 @@ import { IContextKeyService } from '../../../../platform/contextkey/common/conte
 import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
 import { IOpenerService } from '../../../../platform/opener/common/opener.js';
 import { IThemeService } from '../../../../platform/theme/common/themeService.js';
-import { ITelemetryService } from '../../../../platform/telemetry/common/telemetry.js';
+
 import { IHoverService } from '../../../../platform/hover/browser/hover.js';
 import { IViewDescriptorService } from '../../../common/views.js';
 import { AgentState, IAgentDefinition, IAgentInstance, IAgentLaneService } from '../common/agentLaneService.js';
@@ -36,12 +37,11 @@ export class AgentLanesViewPane extends ViewPane {
 		@IInstantiationService instantiationService: IInstantiationService,
 		@IOpenerService openerService: IOpenerService,
 		@IThemeService themeService: IThemeService,
-		@ITelemetryService telemetryService: ITelemetryService,
 		@IHoverService hoverService: IHoverService,
 		@IAgentLaneService private readonly _agentLaneService: IAgentLaneService,
 		@IMultiAgentProviderService private readonly _providerService: IMultiAgentProviderService,
 	) {
-		super(options, keybindingService, contextMenuService, configurationService, contextKeyService, viewDescriptorService, instantiationService, openerService, themeService, telemetryService, hoverService);
+		super(options, keybindingService, contextMenuService, configurationService, contextKeyService, viewDescriptorService, instantiationService, openerService, themeService, hoverService);
 	}
 
 	protected override renderBody(container: HTMLElement): void {
@@ -57,6 +57,9 @@ export class AgentLanesViewPane extends ViewPane {
 
 	protected override layoutBody(height: number, width: number): void {
 		super.layoutBody(height, width);
+		if (this._bodyContainer) {
+			this._bodyContainer.style.height = `${height}px`;
+		}
 	}
 
 	private _renderContent(): void {
@@ -159,6 +162,16 @@ export class AgentLanesViewPane extends ViewPane {
 			errorEl.textContent = instance.error.message;
 			errorEl.title = `Retry count: ${instance.error.retryCount}`;
 		}
+
+		// Card actions: stop button
+		const actionsRow = dom.append(card, dom.$('.agent-card-actions'));
+		const stopBtn = dom.append(actionsRow, dom.$('a.agent-action-stop'));
+		stopBtn.textContent = 'Stop';
+		stopBtn.title = 'Terminate this agent';
+		this._bodyDisposables.add(dom.addDisposableListener(stopBtn, dom.EventType.CLICK, (e) => {
+			e.stopPropagation();
+			this._agentLaneService.terminateAgent(instance.id);
+		}));
 	}
 
 	private _renderAvailableAgents(container: HTMLElement): void {
