@@ -85,64 +85,11 @@ Registry.as<IViewsRegistry>(ViewExtensions.ViewsRegistry).registerViews([
 	},
 ], multiAgentViewContainer);
 
-// --- Auto-register spawned agents as chat participants ---
+// --- Imports for contributions ---
 import { Disposable, IDisposable } from '../../../../base/common/lifecycle.js';
 import { IQuickInputService } from '../../../../platform/quickinput/common/quickInput.js';
 import { AgentCreationWizard } from './agentCreationWizard.js';
 import { registerWorkbenchContribution2, WorkbenchPhase } from '../../../common/contributions.js';
-
-class MultiAgentAutoRegisterContribution extends Disposable {
-	static readonly ID = 'workbench.contrib.multiAgentAutoRegister';
-
-	private readonly _registrations = new Map<string, IDisposable>();
-
-	constructor(
-		@IAgentLaneService private readonly _agentLaneService: IAgentLaneService,
-		@IAgentChatBridge private readonly _chatBridge: IAgentChatBridge,
-	) {
-		super();
-
-		// Single listener: register new agents, unregister removed ones
-		this._register(this._agentLaneService.onDidChangeInstances(() => {
-			const activeInstances = this._agentLaneService.getAgentInstances();
-			const activeIds = new Set(activeInstances.map(i => i.id));
-
-			// Register new agents
-			for (const instance of activeInstances) {
-				if (!this._registrations.has(instance.id)) {
-					const registration = this._chatBridge.registerAgent(instance.definitionId, instance.id);
-					this._registrations.set(instance.id, registration);
-				}
-			}
-
-			// Unregister removed agents
-			for (const [id, registration] of this._registrations) {
-				if (!activeIds.has(id)) {
-					registration.dispose();
-					this._registrations.delete(id);
-				}
-			}
-		}));
-
-		// Auto-spawn built-in agents so they're @mentionable immediately
-		for (const def of this._agentLaneService.getBuiltInAgents()) {
-			try {
-				this._agentLaneService.spawnAgent(def.id);
-			} catch {
-				// Ignore if max agents reached
-			}
-		}
-	}
-
-	override dispose(): void {
-		for (const registration of this._registrations.values()) {
-			registration.dispose();
-		}
-		this._registrations.clear();
-		super.dispose();
-	}
-}
-registerWorkbenchContribution2(MultiAgentAutoRegisterContribution.ID, MultiAgentAutoRegisterContribution, WorkbenchPhase.AfterRestored);
 
 // --- Commands ---
 const COMMAND_OPEN_PROVIDERS = 'workbench.action.multiAgent.openProviders';
@@ -225,11 +172,9 @@ registerAction2(class StopAllAgentsAction extends Action2 {
 			}],
 		});
 	}
-	run(accessor: ServicesAccessor) {
-		const agentLaneService = accessor.get(IAgentLaneService);
-		for (const instance of agentLaneService.getAgentInstances()) {
-			agentLaneService.terminateAgent(instance.id);
-		}
+	run(_accessor: ServicesAccessor) {
+		// Agents are now managed by VS Code's built-in chat mode system
+		// No action needed — custom agents persist as .agent.md files
 	}
 });
 
@@ -262,7 +207,6 @@ class MultiAgentDefaultOverrideContribution extends Disposable {
 
 	constructor(
 		@IProviderPickerService private readonly _pickerService: IProviderPickerService,
-		@IAgentLaneService private readonly _agentLaneService: IAgentLaneService,
 		@IAgentChatBridge private readonly _chatBridge: IAgentChatBridge,
 	) {
 		super();
@@ -279,26 +223,10 @@ class MultiAgentDefaultOverrideContribution extends Disposable {
 
 	private _registerOrchestratorAsDefault(): void {
 		if (this._defaultRegistration) {
-			return; // Already registered
-		}
-
-		// Find or spawn orchestrator agent and register with isDefault=true
-		const definitions = this._agentLaneService.getAgentDefinitions();
-		const plannerDef = definitions.find(d => d.role === 'planner') ?? definitions[0];
-		if (!plannerDef) {
 			return;
 		}
-
-		// Ensure an instance exists
-		let instance = this._agentLaneService.getAgentInstances().find(
-			i => i.definitionId === plannerDef.id
-		);
-		if (!instance) {
-			instance = this._agentLaneService.spawnAgent(plannerDef.id);
-		}
-
-		// Register as default chat agent (overwrites Copilot as default)
-		this._defaultRegistration = this._chatBridge.registerAgent(plannerDef.id, instance.id, true);
+		// Register a bridge agent as default — routes through selected provider
+		this._defaultRegistration = this._chatBridge.registerAgent('multi-agent-orchestrator', 'default-override', true);
 	}
 
 	private _unregisterDefault(): void {
