@@ -42,6 +42,9 @@ registerSingleton(IProviderRotationService, ProviderRotationServiceImpl, Instant
 registerSingleton(IAgentChatBridge, AgentChatBridgeImpl, InstantiationType.Delayed);
 registerSingleton(IDirectProviderClient, DirectProviderClientImpl, InstantiationType.Delayed);
 
+import { IProviderPickerService, ProviderPickerServiceImpl } from './providerPickerService.js';
+registerSingleton(IProviderPickerService, ProviderPickerServiceImpl, InstantiationType.Delayed);
+
 // --- Icons ---
 const multiAgentViewIcon = registerIcon('multi-agent-view-icon', Codicon.sparkle, localize('multiAgentViewIcon', 'Icon for the Multi-Agent view container'));
 
@@ -229,6 +232,86 @@ registerAction2(class StopAllAgentsAction extends Action2 {
 		}
 	}
 });
+
+// --- Provider Picker (Chat Input) ---
+const COMMAND_SELECT_PROVIDER = 'workbench.action.multiAgent.selectProvider';
+
+registerAction2(class SelectProviderAction extends Action2 {
+	constructor() {
+		super({
+			id: COMMAND_SELECT_PROVIDER,
+			title: localize2('selectProvider', "Select AI Provider"),
+			icon: Codicon.cloudUpload,
+			menu: [{
+				id: MenuId.ChatInput,
+				group: 'navigation',
+				order: -1, // Before other items
+			}],
+		});
+	}
+	run(accessor: ServicesAccessor) {
+		return accessor.get(IProviderPickerService).showPicker();
+	}
+});
+
+// --- Default Agent Override (route chat through our system when non-Copilot selected) ---
+class MultiAgentDefaultOverrideContribution extends Disposable {
+	static readonly ID = 'workbench.contrib.multiAgentDefaultOverride';
+
+	private _defaultRegistration: IDisposable | undefined;
+
+	constructor(
+		@IProviderPickerService private readonly _pickerService: IProviderPickerService,
+		@IAgentLaneService private readonly _agentLaneService: IAgentLaneService,
+		@IAgentChatBridge private readonly _chatBridge: IAgentChatBridge,
+	) {
+		super();
+
+		// When provider changes, toggle orchestrator as default agent
+		this._register(this._pickerService.onDidChangeProvider((providerId) => {
+			if (providerId !== 'copilot') {
+				this._registerOrchestratorAsDefault();
+			} else {
+				this._unregisterDefault();
+			}
+		}));
+	}
+
+	private _registerOrchestratorAsDefault(): void {
+		if (this._defaultRegistration) {
+			return; // Already registered
+		}
+
+		// Find or spawn orchestrator agent and register with isDefault=true
+		const definitions = this._agentLaneService.getAgentDefinitions();
+		const plannerDef = definitions.find(d => d.role === 'planner') ?? definitions[0];
+		if (!plannerDef) {
+			return;
+		}
+
+		// Ensure an instance exists
+		let instance = this._agentLaneService.getAgentInstances().find(
+			i => i.definitionId === plannerDef.id
+		);
+		if (!instance) {
+			instance = this._agentLaneService.spawnAgent(plannerDef.id);
+		}
+
+		// Register as default chat agent (overwrites Copilot as default)
+		this._defaultRegistration = this._chatBridge.registerAgent(plannerDef.id, instance.id);
+	}
+
+	private _unregisterDefault(): void {
+		this._defaultRegistration?.dispose();
+		this._defaultRegistration = undefined;
+	}
+
+	override dispose(): void {
+		this._unregisterDefault();
+		super.dispose();
+	}
+}
+registerWorkbenchContribution2(MultiAgentDefaultOverrideContribution.ID, MultiAgentDefaultOverrideContribution, WorkbenchPhase.AfterRestored);
 
 // --- Configuration ---
 Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).registerConfiguration({
