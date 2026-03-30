@@ -17,6 +17,8 @@ import { IThemeService } from '../../../../platform/theme/common/themeService.js
 import { IHoverService } from '../../../../platform/hover/browser/hover.js';
 import { IViewDescriptorService } from '../../../common/views.js';
 import { IMultiAgentProviderService, IProviderAccount, IProviderDefinition, IProviderQuotaSummary } from '../common/multiAgentProviderService.js';
+import { IQuickInputService } from '../../../../platform/quickinput/common/quickInput.js';
+import { localize } from '../../../../nls.js';
 import * as dom from '../../../../base/browser/dom.js';
 
 export class ProvidersViewPane extends ViewPane {
@@ -38,6 +40,7 @@ export class ProvidersViewPane extends ViewPane {
 		@IThemeService themeService: IThemeService,
 		@IHoverService hoverService: IHoverService,
 		@IMultiAgentProviderService private readonly _providerService: IMultiAgentProviderService,
+		@IQuickInputService private readonly _quickInputService: IQuickInputService,
 	) {
 		super(options, keybindingService, contextMenuService, configurationService, contextKeyService, viewDescriptorService, instantiationService, openerService, themeService, hoverService);
 	}
@@ -177,7 +180,16 @@ export class ProvidersViewPane extends ViewPane {
 		const nameEl = dom.append(header, dom.$('.provider-name'));
 		nameEl.textContent = `${provider.name} (${accounts.length} account${accounts.length !== 1 ? 's' : ''})`;
 
-		// Account list (expandable)
+		// Add account button
+		const addBtn = dom.append(header, dom.$('a.provider-add-account'));
+		addBtn.textContent = '+ Add Key';
+		addBtn.title = 'Add API key for this provider';
+		this._bodyDisposables.add(dom.addDisposableListener(addBtn, dom.EventType.CLICK, async (e) => {
+			e.stopPropagation();
+			await this._addAccountFlow(provider);
+		}));
+
+		// Account list
 		const accountList = dom.append(node, dom.$('.provider-accounts'));
 		for (const account of accounts) {
 			this._renderAccountNode(accountList, account);
@@ -218,5 +230,36 @@ export class ProvidersViewPane extends ViewPane {
 		// Priority badge
 		const priority = dom.append(node, dom.$('.account-priority'));
 		priority.textContent = account.priority === 0 ? 'Primary' : `Priority ${account.priority + 1}`;
+	}
+
+	/** Flow to add a new API key account for a provider */
+	private async _addAccountFlow(provider: IProviderDefinition): Promise<void> {
+		// Step 1: Account label
+		const label = await this._quickInputService.input({
+			title: localize('addAccount.label', "Add Account — {0}", provider.name),
+			prompt: localize('addAccount.labelPrompt', "Enter a label for this account"),
+			placeHolder: localize('addAccount.labelPlaceholder', "e.g., Personal Key, Team Key..."),
+		});
+		if (!label) {
+			return;
+		}
+
+		// Step 2: API key
+		const apiKey = await this._quickInputService.input({
+			title: localize('addAccount.key', "API Key — {0}", provider.name),
+			prompt: localize('addAccount.keyPrompt', "Enter your API key"),
+			placeHolder: localize('addAccount.keyPlaceholder', "sk-..."),
+			password: true,
+		});
+		if (!apiKey) {
+			return;
+		}
+
+		// Create account and store credential
+		const account = await this._providerService.addAccount(provider.id, label, 'apiKey');
+		await this._providerService.setAccountCredential(account.id, apiKey);
+
+		// Re-render
+		this._renderContent();
 	}
 }

@@ -9,6 +9,13 @@
 .multi-agent-lanes-view {
 	padding: 8px;
 	overflow-y: auto;
+	height: 100%;
+	box-sizing: border-box;
+}
+
+.providers-content,
+.agent-lanes-content {
+	min-height: min-content;
 }
 
 /* ===== Quota Dashboard ===== */
@@ -141,6 +148,19 @@
 .provider-name {
 	font-size: 12px;
 	color: var(--vscode-foreground);
+	flex: 1;
+}
+
+.provider-add-account {
+	font-size: 11px;
+	color: var(--vscode-textLink-foreground, #3794ff);
+	cursor: pointer;
+	text-decoration: none;
+	margin-left: auto;
+}
+
+.provider-add-account:hover {
+	text-decoration: underline;
 }
 
 .provider-accounts {

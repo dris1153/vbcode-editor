@@ -13,13 +13,16 @@ import { IContextKeyService } from '../../../../platform/contextkey/common/conte
 import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
 import { IOpenerService } from '../../../../platform/opener/common/opener.js';
 import { IThemeService } from '../../../../platform/theme/common/themeService.js';
-
 import { IHoverService } from '../../../../platform/hover/browser/hover.js';
 import { IViewDescriptorService } from '../../../common/views.js';
-import { AgentState, IAgentDefinition, IAgentInstance, IAgentLaneService } from '../common/agentLaneService.js';
-import { IMultiAgentProviderService } from '../common/multiAgentProviderService.js';
+import { IChatMode, IChatModeService } from '../../chat/common/chatModes.js';
+import { ChatModeKind } from '../../chat/common/constants.js';
 import * as dom from '../../../../base/browser/dom.js';
 
+/**
+ * Agent Lanes view — reads from VS Code's IChatModeService to display
+ * all chat modes/custom agents in a unified view synchronized with the Chat picker.
+ */
 export class AgentLanesViewPane extends ViewPane {
 
 	static readonly ID = 'workbench.views.multiAgent.agentLanes';
@@ -38,8 +41,7 @@ export class AgentLanesViewPane extends ViewPane {
 		@IOpenerService openerService: IOpenerService,
 		@IThemeService themeService: IThemeService,
 		@IHoverService hoverService: IHoverService,
-		@IAgentLaneService private readonly _agentLaneService: IAgentLaneService,
-		@IMultiAgentProviderService private readonly _providerService: IMultiAgentProviderService,
+		@IChatModeService private readonly _chatModeService: IChatModeService,
 	) {
 		super(options, keybindingService, contextMenuService, configurationService, contextKeyService, viewDescriptorService, instantiationService, openerService, themeService, hoverService);
 	}
@@ -50,9 +52,8 @@ export class AgentLanesViewPane extends ViewPane {
 		container.classList.add('multi-agent-lanes-view');
 		this._renderContent();
 
-		this._bodyDisposables.add(this._agentLaneService.onDidChangeInstances(() => this._renderContent()));
-		this._bodyDisposables.add(this._agentLaneService.onDidChangeState(() => this._renderTrackingBoard()));
-		this._bodyDisposables.add(this._agentLaneService.onDidChangeDefinitions(() => this._renderContent()));
+		// Re-render when chat modes change (agent created/deleted/updated)
+		this._bodyDisposables.add(this._chatModeService.onDidChangeChatModes(() => this._renderContent()));
 	}
 
 	protected override layoutBody(height: number, width: number): void {
@@ -69,169 +70,92 @@ export class AgentLanesViewPane extends ViewPane {
 		dom.clearNode(this._bodyContainer);
 
 		const wrapper = dom.append(this._bodyContainer, dom.$('.agent-lanes-content'));
+		const modes = this._chatModeService.getModes();
 
-		// Active agents tracking board
-		this._renderTrackingBoard(wrapper);
+		// Built-in modes section
+		this._renderBuiltinModes(wrapper, modes.builtin);
 
-		// Available agent definitions
-		this._renderAvailableAgents(wrapper);
+		// Custom agents section
+		this._renderCustomAgents(wrapper, modes.custom);
 	}
 
-	private _renderTrackingBoard(container?: HTMLElement): void {
-		const target = container ?? this._bodyContainer?.querySelector('.tracking-board');
-		if (!target) {
-			return;
-		}
+	private _renderBuiltinModes(container: HTMLElement, modes: readonly IChatMode[]): void {
+		const section = dom.append(container, dom.$('.tracking-board'));
+		const header = dom.append(section, dom.$('.tracking-board-header'));
+		header.textContent = `Built-in Modes (${modes.length})`;
 
-		const existing = target.querySelector('.tracking-board');
-		if (existing) {
-			existing.remove();
-		}
+		const list = dom.append(section, dom.$('.available-agents-list'));
+		for (const mode of modes) {
+			const item = dom.append(list, dom.$('.available-agent-item'));
+			const label = mode.label.get();
+			const kind = mode.kind;
+			item.textContent = label;
+			item.title = mode.description.get() ?? '';
 
-		const instances = this._agentLaneService.getAgentInstances();
-		const board = dom.append(target, dom.$('.tracking-board'));
-
-		// Header with count
-		const header = dom.append(board, dom.$('.tracking-board-header'));
-		const activeCount = instances.filter(i => i.state !== AgentState.Idle && i.state !== AgentState.Done).length;
-		header.textContent = `Active Agents (${activeCount}/${instances.length})`;
-
-		if (instances.length === 0) {
-			const empty = dom.append(board, dom.$('.tracking-board-empty'));
-			empty.textContent = 'No agents spawned. Click + to create one.';
-			return;
-		}
-
-		// Agent cards grid
-		const grid = dom.append(board, dom.$('.agent-cards-grid'));
-		for (const instance of instances) {
-			const definition = this._agentLaneService.getAgentDefinition(instance.definitionId);
-			if (definition) {
-				this._renderAgentCard(grid, instance, definition);
+			// Highlight Agent mode
+			if (kind === ChatModeKind.Agent) {
+				item.classList.add('agent-card-running');
 			}
 		}
 	}
 
-	private _renderAgentCard(container: HTMLElement, instance: IAgentInstance, definition: IAgentDefinition): void {
-		const card = dom.append(container, dom.$('.agent-card'));
+	private _renderCustomAgents(container: HTMLElement, agents: readonly IChatMode[]): void {
+		const section = dom.append(container, dom.$('.tracking-board'));
+		const header = dom.append(section, dom.$('.tracking-board-header'));
+		header.textContent = `Custom Agents (${agents.length})`;
 
-		// State-colored border
-		const stateClass = this._getStateClass(instance.state);
-		card.classList.add(`agent-card-${stateClass}`);
-
-		// Header: icon + name + state indicator
-		const cardHeader = dom.append(card, dom.$('.agent-card-header'));
-
-		const stateIcon = dom.append(cardHeader, dom.$('.agent-state-icon'));
-		stateIcon.classList.add(`state-${stateClass}`);
-		stateIcon.textContent = this._getStateSymbol(instance.state);
-
-		const nameEl = dom.append(cardHeader, dom.$('.agent-card-name'));
-		nameEl.textContent = definition.name;
-
-		const roleEl = dom.append(cardHeader, dom.$('.agent-card-role'));
-		roleEl.textContent = definition.role;
-
-		// Model + Provider
-		const modelRow = dom.append(card, dom.$('.agent-card-model'));
-		modelRow.textContent = definition.modelId;
-
-		if (instance.activeProviderId) {
-			const provider = this._providerService.getProvider(instance.activeProviderId);
-			const providerEl = dom.append(card, dom.$('.agent-card-provider'));
-			providerEl.textContent = provider?.name ?? instance.activeProviderId;
-		}
-
-		// Current task
-		if (instance.currentTaskDescription) {
-			const taskEl = dom.append(card, dom.$('.agent-card-task'));
-			taskEl.textContent = instance.currentTaskDescription;
-			taskEl.title = instance.currentTaskDescription;
-		}
-
-		// Token usage
-		const totalTokens = instance.tokenUsage.input + instance.tokenUsage.output;
-		if (totalTokens > 0) {
-			const tokensEl = dom.append(card, dom.$('.agent-card-tokens'));
-			tokensEl.textContent = this._formatTokenCount(totalTokens);
-		}
-
-		// Error display
-		if (instance.error) {
-			const errorEl = dom.append(card, dom.$('.agent-card-error'));
-			errorEl.textContent = instance.error.message;
-			errorEl.title = `Retry count: ${instance.error.retryCount}`;
-		}
-
-		// Card actions: stop button
-		const actionsRow = dom.append(card, dom.$('.agent-card-actions'));
-		const stopBtn = dom.append(actionsRow, dom.$('a.agent-action-stop'));
-		stopBtn.textContent = 'Stop';
-		stopBtn.title = 'Terminate this agent';
-		this._bodyDisposables.add(dom.addDisposableListener(stopBtn, dom.EventType.CLICK, (e) => {
-			e.stopPropagation();
-			this._agentLaneService.terminateAgent(instance.id);
-		}));
-	}
-
-	private _renderAvailableAgents(container: HTMLElement): void {
-		const section = dom.append(container, dom.$('.available-agents'));
-		const header = dom.append(section, dom.$('.available-agents-header'));
-
-		const definitions = this._agentLaneService.getAgentDefinitions();
-		const instances = this._agentLaneService.getAgentInstances();
-		const spawnedDefIds = new Set(instances.map(i => i.definitionId));
-		const available = definitions.filter(d => !spawnedDefIds.has(d.id));
-
-		header.textContent = `Available Agents (${available.length})`;
-
-		if (available.length === 0) {
-			const empty = dom.append(section, dom.$('.available-agents-empty'));
-			empty.textContent = 'All agents are active';
+		if (agents.length === 0) {
+			const empty = dom.append(section, dom.$('.tracking-board-empty'));
+			empty.textContent = 'No custom agents. Use "Configure Custom Agents..." in Chat to create one.';
 			return;
 		}
 
-		const list = dom.append(section, dom.$('.available-agents-list'));
-		for (const def of available) {
-			const item = dom.append(list, dom.$('.available-agent-item'));
-			item.textContent = `${def.name} · ${def.role}`;
-			item.title = def.description;
+		const grid = dom.append(section, dom.$('.agent-cards-grid'));
+		for (const agent of agents) {
+			this._renderAgentCard(grid, agent);
 		}
 	}
 
-	private _getStateClass(state: AgentState): string {
-		switch (state) {
-			case AgentState.Running: return 'running';
-			case AgentState.Queued: return 'queued';
-			case AgentState.Blocked:
-			case AgentState.Waiting: return 'blocked';
-			case AgentState.Error: return 'error';
-			case AgentState.Done: return 'done';
-			case AgentState.Idle:
-			default: return 'idle';
-		}
-	}
+	private _renderAgentCard(container: HTMLElement, mode: IChatMode): void {
+		const card = dom.append(container, dom.$('.agent-card'));
+		card.classList.add('agent-card-idle');
 
-	private _getStateSymbol(state: AgentState): string {
-		switch (state) {
-			case AgentState.Running: return '>>';
-			case AgentState.Queued: return '..';
-			case AgentState.Blocked:
-			case AgentState.Waiting: return '||';
-			case AgentState.Error: return '!!';
-			case AgentState.Done: return 'OK';
-			case AgentState.Idle:
-			default: return '--';
-		}
-	}
+		// Header
+		const cardHeader = dom.append(card, dom.$('.agent-card-header'));
 
-	private _formatTokenCount(tokens: number): string {
-		if (tokens >= 1_000_000) {
-			return `${(tokens / 1_000_000).toFixed(1)}M tokens`;
+		const icon = mode.icon.get();
+		if (icon) {
+			const iconEl = dom.append(cardHeader, dom.$('.agent-state-icon'));
+			iconEl.classList.add(`codicon-${icon.id}`);
 		}
-		if (tokens >= 1_000) {
-			return `${(tokens / 1_000).toFixed(1)}k tokens`;
+
+		const nameEl = dom.append(cardHeader, dom.$('.agent-card-name'));
+		nameEl.textContent = mode.label.get();
+
+		const kindEl = dom.append(cardHeader, dom.$('.agent-card-role'));
+		kindEl.textContent = mode.isBuiltin ? mode.kind : 'custom agent';
+
+		// Description
+		const desc = mode.description.get();
+		if (desc) {
+			const descEl = dom.append(card, dom.$('.agent-card-model'));
+			descEl.textContent = desc;
 		}
-		return `${tokens} tokens`;
+
+		// Model info
+		const model = mode.model?.get();
+		if (model) {
+			const modelEl = dom.append(card, dom.$('.agent-card-provider'));
+			const modelStr = Array.isArray(model) ? model.join(', ') : String(model);
+			modelEl.textContent = `Model: ${modelStr}`;
+		}
+
+		// Source info (file path)
+		const uri = mode.uri?.get();
+		if (uri) {
+			const sourceEl = dom.append(card, dom.$('.agent-card-tokens'));
+			sourceEl.textContent = uri.fsPath.split(/[/\\]/).pop() ?? '';
+			sourceEl.title = uri.fsPath;
+		}
 	}
 }

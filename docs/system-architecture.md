@@ -573,12 +573,29 @@ VS Code includes a comprehensive multi-agent orchestrator framework enabling spe
 
 **Module Location**: `src/vs/workbench/contrib/multiAgent/`
 
-**Key Components**:
-- **IMultiAgentProviderService** - Provider account and credential management
-- **IAgentLaneService** - Agent lifecycle and state machine
-- **IOrchestratorService** - Task decomposition and delegation
-- **IProviderRotationService** - Load balancing and quota tracking
-- **Sidebar Views** - Providers ViewPane and Agent Lanes ViewPane
+**Architecture Layers**:
+
+**Service Layer (common/)**:
+- **IMultiAgentProviderService** - Multi-account provider management with API key rotation, quota tracking, SecretStorage integration
+- **IAgentLaneService** - Agent lifecycle and state machine (idle → running → completed)
+- **IOrchestratorService** - Task decomposition, fan-out/fan-in delegation
+- **IProviderRotationService** - Load balancing with round-robin/priority/cost-optimized strategies
+- **Supporting Modules**:
+  - **ApiFormatTranslator** - Bidirectional format conversion (Anthropic ↔ OpenAI ↔ Google)
+  - **DirectProviderClient** - HTTP client for direct API calls when LM service unavailable
+  - **AgentChatBridge** - Connects agents to ILanguageModelsService + DirectProviderClient
+  - **ModelProviderMap** - Built-in provider/model definitions
+  - **BuiltInAgents** - 6 pre-configured agent templates
+
+**UI Layer (browser/)**:
+- **ProvidersViewPane** - Sidebar quota dashboard + account management
+- **AgentLanesViewPane** - Unified agent tracking board (reads from `IChatModeService`)
+- **ProviderPickerService** - Chat input toolbar provider selector
+- **Multiagent.contribution** - Service registration and extension wiring
+
+**Agent Templates (.vscode/agents/)**:
+- 6 built-in agents stored as `.agent.md` files (Planner, Coder, Designer, Tester, Reviewer, Debugger)
+- Unified with VS Code's IChatModeService (Chat mode picker)
 
 For detailed architecture, see [Multi-Agent Orchestrator Documentation](./multiagent-orchestrator.md).
 
@@ -765,7 +782,6 @@ plans/<plan-name>/reports/251026-from-tester-to-main-test-results-report.md
 ## Extension Points
 
 Create new agents at `.claude/agents/my-agent.md`, new skills at `.claude/skills/my-skill/`, and custom workflows at `.claude/rules/`.
-
 ## References
 
 ### Internal Documentation
@@ -781,7 +797,6 @@ Create new agents at `.claude/agents/my-agent.md`, new skills at `.claude/skills
 
 ## Unresolved Questions
 
-1. **Real-Time Collaboration**: How to handle multiple developers using agents simultaneously on same codebase?
-2. **Agent State Management**: Should agents maintain state between invocations beyond file system?
-3. **Distributed Execution**: Architecture for running agents across multiple machines?
-4. **Performance Benchmarking**: What are acceptable latency thresholds for different operation types?
+1. **Real-Time Collaboration**: How to handle multiple developers using agents simultaneously?
+2. **Distributed Execution**: Architecture for running agents across multiple machines?
+3. **Performance Benchmarking**: What are acceptable latency thresholds for operations?

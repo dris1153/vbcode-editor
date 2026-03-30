@@ -38,7 +38,7 @@ export interface IAgentChatBridge {
 	 * Register a spawned agent instance as a dynamic VS Code chat participant.
 	 * Returns a disposable to unregister.
 	 */
-	registerAgent(definitionId: string, instanceId: string): IDisposable;
+	registerAgent(definitionId: string, instanceId: string, isDefault?: boolean): IDisposable;
 
 	/**
 	 * Execute a message against an agent's LLM, returning the streamed response text.
@@ -75,7 +75,7 @@ export class AgentChatBridgeImpl extends Disposable implements IAgentChatBridge 
 		super();
 	}
 
-	registerAgent(definitionId: string, instanceId: string): IDisposable {
+	registerAgent(definitionId: string, instanceId: string, isDefault?: boolean): IDisposable {
 		const definition = this._agentLaneService.getAgentDefinition(definitionId);
 		if (!definition) {
 			throw new Error(`Agent definition not found: ${definitionId}`);
@@ -93,11 +93,12 @@ export class AgentChatBridgeImpl extends Disposable implements IAgentChatBridge 
 			extensionDisplayName: 'Multi-Agent Orchestrator',
 			isDynamic: true,
 			isCore: true,
+			isDefault: isDefault ?? false,
 			metadata: {
 				themeIcon: { id: definition.icon },
 			},
 			slashCommands: [],
-			locations: [ChatAgentLocation.Panel],
+			locations: [ChatAgentLocation.Chat],
 			modes: [ChatModeKind.Ask, ChatModeKind.Agent],
 			disambiguation: [],
 		};
@@ -142,11 +143,10 @@ export class AgentChatBridgeImpl extends Disposable implements IAgentChatBridge 
 				token: CancellationToken,
 			): Promise<IChatAgentResult> => {
 				const startTime = Date.now();
+				const instance = this._agentLaneService.getAgentInstance(instanceId);
+				const needsTransition = instance?.state === AgentState.Idle;
 
 				try {
-					// Transition agent to running (only when invoked as chat participant directly)
-					const instance = this._agentLaneService.getAgentInstance(instanceId);
-					const needsTransition = instance?.state === AgentState.Idle;
 					if (needsTransition) {
 						this._agentLaneService.transitionState(instanceId, AgentState.Queued);
 						this._agentLaneService.transitionState(instanceId, AgentState.Running);

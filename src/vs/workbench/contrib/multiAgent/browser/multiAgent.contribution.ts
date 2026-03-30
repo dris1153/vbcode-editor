@@ -21,8 +21,6 @@ import { IViewsService } from '../../../services/views/common/viewsService.js';
 // --- Service registrations ---
 import { IMultiAgentProviderService } from '../common/multiAgentProviderService.js';
 import { MultiAgentProviderServiceImpl } from '../common/multiAgentProviderServiceImpl.js';
-import { IAgentLaneService } from '../common/agentLaneService.js';
-import { AgentLaneServiceImpl } from '../common/agentLaneServiceImpl.js';
 import { IOrchestratorService } from '../common/orchestratorService.js';
 import { OrchestratorServiceImpl } from '../common/orchestratorServiceImpl.js';
 import { IProviderRotationService } from '../common/providerRotationService.js';
@@ -36,11 +34,13 @@ import { AgentLanesViewPane } from './agentLanesViewPane.js';
 
 // --- Register services (lazy instantiation) ---
 registerSingleton(IMultiAgentProviderService, MultiAgentProviderServiceImpl, InstantiationType.Delayed);
-registerSingleton(IAgentLaneService, AgentLaneServiceImpl, InstantiationType.Delayed);
 registerSingleton(IOrchestratorService, OrchestratorServiceImpl, InstantiationType.Delayed);
 registerSingleton(IProviderRotationService, ProviderRotationServiceImpl, InstantiationType.Delayed);
 registerSingleton(IAgentChatBridge, AgentChatBridgeImpl, InstantiationType.Delayed);
 registerSingleton(IDirectProviderClient, DirectProviderClientImpl, InstantiationType.Delayed);
+
+import { IProviderPickerService, ProviderPickerServiceImpl } from './providerPickerService.js';
+registerSingleton(IProviderPickerService, ProviderPickerServiceImpl, InstantiationType.Delayed);
 
 // --- Icons ---
 const multiAgentViewIcon = registerIcon('multi-agent-view-icon', Codicon.sparkle, localize('multiAgentViewIcon', 'Icon for the Multi-Agent view container'));
@@ -82,64 +82,9 @@ Registry.as<IViewsRegistry>(ViewExtensions.ViewsRegistry).registerViews([
 	},
 ], multiAgentViewContainer);
 
-// --- Auto-register spawned agents as chat participants ---
+// --- Imports for contributions ---
 import { Disposable, IDisposable } from '../../../../base/common/lifecycle.js';
-import { IQuickInputService } from '../../../../platform/quickinput/common/quickInput.js';
-import { AgentCreationWizard } from './agentCreationWizard.js';
 import { registerWorkbenchContribution2, WorkbenchPhase } from '../../../common/contributions.js';
-
-class MultiAgentAutoRegisterContribution extends Disposable {
-	static readonly ID = 'workbench.contrib.multiAgentAutoRegister';
-
-	private readonly _registrations = new Map<string, IDisposable>();
-
-	constructor(
-		@IAgentLaneService private readonly _agentLaneService: IAgentLaneService,
-		@IAgentChatBridge private readonly _chatBridge: IAgentChatBridge,
-	) {
-		super();
-
-		// Single listener: register new agents, unregister removed ones
-		this._register(this._agentLaneService.onDidChangeInstances(() => {
-			const activeInstances = this._agentLaneService.getAgentInstances();
-			const activeIds = new Set(activeInstances.map(i => i.id));
-
-			// Register new agents
-			for (const instance of activeInstances) {
-				if (!this._registrations.has(instance.id)) {
-					const registration = this._chatBridge.registerAgent(instance.definitionId, instance.id);
-					this._registrations.set(instance.id, registration);
-				}
-			}
-
-			// Unregister removed agents
-			for (const [id, registration] of this._registrations) {
-				if (!activeIds.has(id)) {
-					registration.dispose();
-					this._registrations.delete(id);
-				}
-			}
-		}));
-
-		// Auto-spawn built-in agents so they're @mentionable immediately
-		for (const def of this._agentLaneService.getBuiltInAgents()) {
-			try {
-				this._agentLaneService.spawnAgent(def.id);
-			} catch {
-				// Ignore if max agents reached
-			}
-		}
-	}
-
-	override dispose(): void {
-		for (const registration of this._registrations.values()) {
-			registration.dispose();
-		}
-		this._registrations.clear();
-		super.dispose();
-	}
-}
-registerWorkbenchContribution2(MultiAgentAutoRegisterContribution.ID, MultiAgentAutoRegisterContribution, WorkbenchPhase.AfterRestored);
 
 // --- Commands ---
 const COMMAND_OPEN_PROVIDERS = 'workbench.action.multiAgent.openProviders';
@@ -199,12 +144,8 @@ registerAction2(class AddAgentAction extends Action2 {
 		});
 	}
 	run(accessor: ServicesAccessor) {
-		const wizard = new AgentCreationWizard(
-			accessor.get(IQuickInputService),
-			accessor.get(IAgentLaneService),
-			accessor.get(IMultiAgentProviderService),
-		);
-		return wizard.run();
+		// Use VS Code's built-in "Configure Custom Agents" command
+		return accessor.get(ICommandService).executeCommand('workbench.action.chat.configureCustomAgents');
 	}
 });
 
@@ -222,13 +163,74 @@ registerAction2(class StopAllAgentsAction extends Action2 {
 			}],
 		});
 	}
-	run(accessor: ServicesAccessor) {
-		const agentLaneService = accessor.get(IAgentLaneService);
-		for (const instance of agentLaneService.getAgentInstances()) {
-			agentLaneService.terminateAgent(instance.id);
-		}
+	run(_accessor: ServicesAccessor) {
+		// Agents are now managed by VS Code's built-in chat mode system
+		// No action needed — custom agents persist as .agent.md files
 	}
 });
+
+// --- Provider Picker (Chat Input) ---
+const COMMAND_SELECT_PROVIDER = 'workbench.action.multiAgent.selectProvider';
+
+registerAction2(class SelectProviderAction extends Action2 {
+	constructor() {
+		super({
+			id: COMMAND_SELECT_PROVIDER,
+			title: localize2('selectProvider', "Select AI Provider"),
+			icon: Codicon.cloudUpload,
+			menu: [{
+				id: MenuId.ChatInput,
+				group: 'navigation',
+				order: -1, // Before other items
+			}],
+		});
+	}
+	run(accessor: ServicesAccessor) {
+		return accessor.get(IProviderPickerService).showPicker();
+	}
+});
+
+// --- Default Agent Override (route chat through our system when non-Copilot selected) ---
+class MultiAgentDefaultOverrideContribution extends Disposable {
+	static readonly ID = 'workbench.contrib.multiAgentDefaultOverride';
+
+	private _defaultRegistration: IDisposable | undefined;
+
+	constructor(
+		@IProviderPickerService private readonly _pickerService: IProviderPickerService,
+		@IAgentChatBridge private readonly _chatBridge: IAgentChatBridge,
+	) {
+		super();
+
+		// When provider changes, toggle orchestrator as default agent
+		this._register(this._pickerService.onDidChangeProvider((providerId) => {
+			if (providerId !== 'copilot') {
+				this._registerOrchestratorAsDefault();
+			} else {
+				this._unregisterDefault();
+			}
+		}));
+	}
+
+	private _registerOrchestratorAsDefault(): void {
+		if (this._defaultRegistration) {
+			return;
+		}
+		// Register a bridge agent as default — routes through selected provider
+		this._defaultRegistration = this._chatBridge.registerAgent('multi-agent-orchestrator', 'default-override', true);
+	}
+
+	private _unregisterDefault(): void {
+		this._defaultRegistration?.dispose();
+		this._defaultRegistration = undefined;
+	}
+
+	override dispose(): void {
+		this._unregisterDefault();
+		super.dispose();
+	}
+}
+registerWorkbenchContribution2(MultiAgentDefaultOverrideContribution.ID, MultiAgentDefaultOverrideContribution, WorkbenchPhase.AfterRestored);
 
 // --- Configuration ---
 Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).registerConfiguration({
