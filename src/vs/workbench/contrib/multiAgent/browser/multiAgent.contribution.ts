@@ -21,8 +21,6 @@ import { IViewsService } from '../../../services/views/common/viewsService.js';
 // --- Service registrations ---
 import { IMultiAgentProviderService } from '../common/multiAgentProviderService.js';
 import { MultiAgentProviderServiceImpl } from '../common/multiAgentProviderServiceImpl.js';
-import { IAgentLaneService } from '../common/agentLaneService.js';
-import { AgentLaneServiceImpl } from '../common/agentLaneServiceImpl.js';
 import { IOrchestratorService } from '../common/orchestratorService.js';
 import { OrchestratorServiceImpl } from '../common/orchestratorServiceImpl.js';
 import { IProviderRotationService } from '../common/providerRotationService.js';
@@ -36,7 +34,6 @@ import { AgentLanesViewPane } from './agentLanesViewPane.js';
 
 // --- Register services (lazy instantiation) ---
 registerSingleton(IMultiAgentProviderService, MultiAgentProviderServiceImpl, InstantiationType.Delayed);
-registerSingleton(IAgentLaneService, AgentLaneServiceImpl, InstantiationType.Delayed);
 registerSingleton(IOrchestratorService, OrchestratorServiceImpl, InstantiationType.Delayed);
 registerSingleton(IProviderRotationService, ProviderRotationServiceImpl, InstantiationType.Delayed);
 registerSingleton(IAgentChatBridge, AgentChatBridgeImpl, InstantiationType.Delayed);
@@ -87,8 +84,6 @@ Registry.as<IViewsRegistry>(ViewExtensions.ViewsRegistry).registerViews([
 
 // --- Imports for contributions ---
 import { Disposable, IDisposable } from '../../../../base/common/lifecycle.js';
-import { IQuickInputService } from '../../../../platform/quickinput/common/quickInput.js';
-import { AgentCreationWizard } from './agentCreationWizard.js';
 import { registerWorkbenchContribution2, WorkbenchPhase } from '../../../common/contributions.js';
 
 // --- Commands ---
@@ -149,12 +144,8 @@ registerAction2(class AddAgentAction extends Action2 {
 		});
 	}
 	run(accessor: ServicesAccessor) {
-		const wizard = new AgentCreationWizard(
-			accessor.get(IQuickInputService),
-			accessor.get(IAgentLaneService),
-			accessor.get(IMultiAgentProviderService),
-		);
-		return wizard.run();
+		// Use VS Code's built-in "Configure Custom Agents" command
+		return accessor.get(ICommandService).executeCommand('workbench.action.chat.configureCustomAgents');
 	}
 });
 

@@ -12,7 +12,6 @@ import { createDecorator } from '../../../../platform/instantiation/common/insta
 import { ChatMessageRole, IChatMessage } from '../../chat/common/languageModels.js';
 import { ApiFormat, IMultiAgentProviderService, IProviderAccount } from './multiAgentProviderService.js';
 import { ApiFormatTranslator, IProviderStreamChunk } from './apiFormatTranslator.js';
-import { IProviderRotationService } from './providerRotationService.js';
 
 export const IDirectProviderClient = createDecorator<IDirectProviderClient>('IDirectProviderClient');
 
@@ -43,7 +42,6 @@ export class DirectProviderClientImpl extends Disposable implements IDirectProvi
 		@IRequestService private readonly _requestService: IRequestService,
 		@ISecretStorageService private readonly _secretStorageService: ISecretStorageService,
 		@IMultiAgentProviderService private readonly _providerService: IMultiAgentProviderService,
-		@IProviderRotationService private readonly _rotationService: IProviderRotationService,
 		@ILogService private readonly _logService: ILogService,
 	) {
 		super();
@@ -93,30 +91,20 @@ export class DirectProviderClientImpl extends Disposable implements IDirectProvi
 			throw new Error(`HTTP ${response.res.statusCode} from ${provider.name}`);
 		}
 
-		// Extract quota from response headers
-		const quotaInfo = this._translator.extractQuota(
-			response.res.headers as Record<string, string>,
-			format,
-		);
+		// Extract quota from response headers (safely handle string[] values)
+		const safeHeaders: Record<string, string> = {};
+		for (const [key, value] of Object.entries(response.res.headers)) {
+			safeHeaders[key] = Array.isArray(value) ? value[0] : String(value ?? '');
+		}
+		const quotaInfo = this._translator.extractQuota(safeHeaders, format);
 		if (Object.keys(quotaInfo).length > 0) {
 			this._providerService.updateAccountQuota(account.id, quotaInfo);
 		}
 
-		// Parse SSE stream
-		const responseText = await this._parseSSEStream(response.stream, format, onChunk);
+		// Parse SSE stream with cancellation support
+		const responseText = await this._parseSSEStream(response.stream, format, token, onChunk);
 
-		// Report usage
-		const inputLength = messages.reduce((sum, m) => sum + this._messageLength(m), 0);
-		const inputTokens = Math.ceil(inputLength / 4);
-		const outputTokens = Math.ceil(responseText.length / 4);
-		this._rotationService.reportUsage(account.id, {
-			inputTokens,
-			outputTokens,
-			totalTokens: inputTokens + outputTokens,
-			estimatedCost: (inputTokens + outputTokens) * (account.costPer1MTokens ?? 0) / 1_000_000,
-			timestamp: Date.now(),
-		});
-
+		// Usage reporting is handled by AgentChatBridge (avoid double-reporting)
 		return responseText;
 	}
 
@@ -127,49 +115,55 @@ export class DirectProviderClientImpl extends Disposable implements IDirectProvi
 	private async _parseSSEStream(
 		stream: import('../../../../base/common/buffer.js').VSBufferReadableStream,
 		format: ApiFormat,
+		token: CancellationToken,
 		onChunk?: (text: string) => void,
 	): Promise<string> {
 		return new Promise<string>((resolve, reject) => {
 			let responseText = '';
 			let buffer = '';
+			let resolved = false;
+
+			const finish = (text: string) => {
+				if (!resolved) { resolved = true; resolve(text); }
+			};
+			const fail = (err: Error) => {
+				if (!resolved) { resolved = true; reject(err); }
+			};
+
+			// Cancel support
+			const onCancel = token.onCancellationRequested(() => {
+				fail(new Error('Request cancelled'));
+				onCancel.dispose();
+			});
 
 			stream.on('data', (chunk) => {
+				if (resolved) { return; }
 				buffer += chunk.toString();
 
-				// Process complete SSE lines
 				const lines = buffer.split('\n');
-				buffer = lines.pop() ?? ''; // Keep incomplete last line in buffer
+				buffer = lines.pop() ?? '';
 
 				for (const line of lines) {
 					const trimmed = line.trim();
-					if (!trimmed || trimmed.startsWith(':')) {
-						continue; // Skip empty lines and comments
-					}
+					if (!trimmed || trimmed.startsWith(':')) { continue; }
 
 					if (trimmed.startsWith('data: ')) {
-						const dataContent = trimmed.slice(6);
-						const parsed: IProviderStreamChunk = this._translator.parseStreamChunk(dataContent, format);
-
+						const parsed: IProviderStreamChunk = this._translator.parseStreamChunk(trimmed.slice(6), format);
 						if (parsed.text) {
 							responseText += parsed.text;
 							onChunk?.(parsed.text);
 						}
-
 						if (parsed.done) {
-							resolve(responseText);
+							onCancel.dispose();
+							finish(responseText);
 							return;
 						}
 					}
 				}
 			});
 
-			stream.on('error', (err) => {
-				reject(err);
-			});
-
-			stream.on('end', () => {
-				resolve(responseText);
-			});
+			stream.on('error', (err) => { onCancel.dispose(); fail(err instanceof Error ? err : new Error(String(err))); });
+			stream.on('end', () => { onCancel.dispose(); finish(responseText); });
 		});
 	}
 
