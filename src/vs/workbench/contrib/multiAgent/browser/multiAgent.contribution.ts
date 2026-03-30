@@ -298,7 +298,7 @@ class MultiAgentDefaultOverrideContribution extends Disposable {
 		}
 
 		// Register as default chat agent (overwrites Copilot as default)
-		this._defaultRegistration = this._chatBridge.registerAgent(plannerDef.id, instance.id);
+		this._defaultRegistration = this._chatBridge.registerAgent(plannerDef.id, instance.id, true);
 	}
 
 	private _unregisterDefault(): void {

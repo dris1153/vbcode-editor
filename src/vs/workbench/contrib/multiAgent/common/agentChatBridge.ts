@@ -38,7 +38,7 @@ export interface IAgentChatBridge {
 	 * Register a spawned agent instance as a dynamic VS Code chat participant.
 	 * Returns a disposable to unregister.
 	 */
-	registerAgent(definitionId: string, instanceId: string): IDisposable;
+	registerAgent(definitionId: string, instanceId: string, isDefault?: boolean): IDisposable;
 
 	/**
 	 * Execute a message against an agent's LLM, returning the streamed response text.
@@ -75,7 +75,7 @@ export class AgentChatBridgeImpl extends Disposable implements IAgentChatBridge 
 		super();
 	}
 
-	registerAgent(definitionId: string, instanceId: string): IDisposable {
+	registerAgent(definitionId: string, instanceId: string, isDefault?: boolean): IDisposable {
 		const definition = this._agentLaneService.getAgentDefinition(definitionId);
 		if (!definition) {
 			throw new Error(`Agent definition not found: ${definitionId}`);
@@ -93,6 +93,7 @@ export class AgentChatBridgeImpl extends Disposable implements IAgentChatBridge 
 			extensionDisplayName: 'Multi-Agent Orchestrator',
 			isDynamic: true,
 			isCore: true,
+			isDefault: isDefault ?? false,
 			metadata: {
 				themeIcon: { id: definition.icon },
 			},
