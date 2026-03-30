@@ -27,22 +27,40 @@ claudekit-engineer/
 ├── plans/               # Implementation plans and reports
 │   ├── reports/         # Agent-to-agent communication
 │   └── templates/       # Plan templates
-├── src/vs/workbench/contrib/multiAgent/  # Multi-agent orchestrator system
+├── src/vs/workbench/contrib/multiAgent/  # Multi-agent orchestrator system (21 files)
 │   ├── common/
 │   │   ├── multiAgentProviderService.ts      # IMultiAgentProviderService interface
-│   │   ├── multiAgentProviderServiceImpl.ts   # Provider registry & account management
-│   │   ├── modelProviderMap.ts               # Built-in provider/model definitions
+│   │   ├── multiAgentProviderServiceImpl.ts   # Provider registry & credential management
 │   │   ├── agentLaneService.ts               # IAgentLaneService interface
 │   │   ├── agentLaneServiceImpl.ts            # Agent lifecycle & state machine
-│   │   ├── builtInAgents.ts                  # 6 built-in agent templates
 │   │   ├── orchestratorService.ts            # IOrchestratorService interface
 │   │   ├── orchestratorServiceImpl.ts         # Task decomposition & delegation
 │   │   ├── providerRotationService.ts        # IProviderRotationService interface
-│   │   └── providerRotationServiceImpl.ts     # Auto-rotation & quota tracking
-│   └── browser/
-│       ├── multiAgent.contribution.ts        # Registration & configuration
-│       ├── providersViewPane.ts              # Providers sidebar UI
-│       └── agentLanesViewPane.ts             # Agent Lanes sidebar UI
+│   │   ├── providerRotationServiceImpl.ts     # Load balancing & quota tracking
+│   │   ├── modelProviderMap.ts               # Built-in provider/model definitions
+│   │   ├── builtInAgents.ts                  # 6 pre-configured agent templates
+│   │   ├── apiFormatTranslator.ts            # Anthropic/OpenAI/Google format conversion
+│   │   ├── directProviderClient.ts           # Direct HTTP API calls (fallback)
+│   │   └── agentChatBridge.ts                # ILanguageModelsService + provider bridge
+│   ├── browser/
+│   │   ├── multiAgent.contribution.ts        # Service registration & wiring
+│   │   ├── providersViewPane.ts              # Providers sidebar (quota dashboard)
+│   │   ├── agentLanesViewPane.ts             # Agent Lanes sidebar (unified with IChatModeService)
+│   │   ├── providerPickerService.ts          # Chat input toolbar provider picker
+│   │   └── agentCreationWizard.ts            # UI for creating custom agents
+│   ├── browser/media/
+│   │   └── multiAgent.css                    # Sidebar styling
+│   └── test/common/
+│       ├── multiAgentProviderService.test.ts # Provider service tests
+│       ├── agentLaneService.test.ts          # Agent lifecycle tests
+│       └── apiFormatTranslator.test.ts       # Format translation tests (40 unit tests)
+├── .vscode/agents/  # Built-in agent templates (unified with VS Code Chat)
+│   ├── planner.agent.md                      # Task analysis & planning
+│   ├── coder.agent.md                        # Code implementation
+│   ├── designer.agent.md                     # UI/UX design
+│   ├── tester.agent.md                       # Testing & QA
+│   ├── reviewer.agent.md                     # Code review
+│   └── debugger.agent.md                     # Issue diagnosis
 ├── CLAUDE.md           # Project-specific Claude instructions
 ├── README.md           # Project overview
 ├── package.json        # Node.js dependencies
