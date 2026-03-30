@@ -82,6 +82,7 @@ export class DirectProviderClientImpl extends Disposable implements IDirectProvi
 			url: providerRequest.url,
 			headers: providerRequest.headers,
 			data: providerRequest.body,
+			callSite: 'multiAgent.directProviderClient',
 		}, token);
 
 		// Check for error status

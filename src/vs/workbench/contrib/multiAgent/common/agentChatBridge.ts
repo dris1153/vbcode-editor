@@ -97,7 +97,7 @@ export class AgentChatBridgeImpl extends Disposable implements IAgentChatBridge 
 				themeIcon: { id: definition.icon },
 			},
 			slashCommands: [],
-			locations: [ChatAgentLocation.Panel],
+			locations: [ChatAgentLocation.Chat],
 			modes: [ChatModeKind.Ask, ChatModeKind.Agent],
 			disambiguation: [],
 		};
@@ -142,11 +142,10 @@ export class AgentChatBridgeImpl extends Disposable implements IAgentChatBridge 
 				token: CancellationToken,
 			): Promise<IChatAgentResult> => {
 				const startTime = Date.now();
+				const instance = this._agentLaneService.getAgentInstance(instanceId);
+				const needsTransition = instance?.state === AgentState.Idle;
 
 				try {
-					// Transition agent to running (only when invoked as chat participant directly)
-					const instance = this._agentLaneService.getAgentInstance(instanceId);
-					const needsTransition = instance?.state === AgentState.Idle;
 					if (needsTransition) {
 						this._agentLaneService.transitionState(instanceId, AgentState.Queued);
 						this._agentLaneService.transitionState(instanceId, AgentState.Running);
