@@ -3,7 +3,5 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-.monaco-workbench .part.statusbar > .items-container > #status\.update > a > span {
-	color: var(--vscode-button-background);
-	font-size: 16px;
-}
+// Plugin storage logic has been folded into AgentPluginManager.
+// See agentPluginManager.test.ts for tests.
