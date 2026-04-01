@@ -10,7 +10,7 @@ import { generateUuid } from '../../../../base/common/uuid.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
 import { IAgentChatBridge } from './agentChatBridge.js';
-import { AgentState, IAgentLaneService } from './agentLaneService.js';
+import { IChatModeService } from '../../chat/common/chatModes.js';
 import {
 	IOrchestratorService,
 	IOrchestratorTask,
@@ -33,7 +33,7 @@ export class OrchestratorServiceImpl extends Disposable implements IOrchestrator
 	readonly onDidCompleteExecution: Event<{ taskId: string; summary: string }> = this._onDidCompleteExecution.event;
 
 	constructor(
-		@IAgentLaneService private readonly _agentLaneService: IAgentLaneService,
+		@IChatModeService private readonly _chatModeService: IChatModeService,
 		@IAgentChatBridge private readonly _chatBridge: IAgentChatBridge,
 		@IConfigurationService private readonly _configService: IConfigurationService,
 		@ILogService private readonly _logService: ILogService,
@@ -57,9 +57,15 @@ export class OrchestratorServiceImpl extends Disposable implements IOrchestrator
 			throw new Error(`Task not found: ${taskId}`);
 		}
 
+		// Get available roles from chat modes (custom agents)
+		const modes = this._chatModeService.getModes();
 		const availableRoles = new Set(
-			this._agentLaneService.getAgentDefinitions().map(d => d.role)
+			modes.custom.map(m => m.label.get().toLowerCase())
 		);
+		// Add standard roles if custom agents exist
+		if (availableRoles.size === 0) {
+			availableRoles.add('planner').add('coder').add('tester').add('reviewer');
+		}
 
 		// Try LLM-based decomposition first, fallback to hardcoded pipeline
 		try {
@@ -97,7 +103,7 @@ export class OrchestratorServiceImpl extends Disposable implements IOrchestrator
 				.map(idx => subTaskIds[idx]);
 
 			// Find an agent instance for this role, or spawn one
-			const agentId = this._findOrSpawnAgent(suggestion.suggestedRole);
+			const agentId = this._findAgentForRole(suggestion.suggestedRole);
 			if (agentId) {
 				subTask.assignedAgentId = agentId;
 			}
@@ -189,11 +195,6 @@ export class OrchestratorServiceImpl extends Disposable implements IOrchestrator
 	// --- Direct agent communication ---
 
 	async sendToAgent(agentInstanceId: string, message: string): Promise<string> {
-		const instance = this._agentLaneService.getAgentInstance(agentInstanceId);
-		if (!instance) {
-			throw new Error(`Agent instance not found: ${agentInstanceId}`);
-		}
-
 		const cts = new CancellationTokenSource();
 		try {
 			return await this._chatBridge.executeAgentTask(agentInstanceId, message, cts.token);
@@ -204,34 +205,21 @@ export class OrchestratorServiceImpl extends Disposable implements IOrchestrator
 
 	// --- Private helpers ---
 
-	private _findOrSpawnAgent(role: string): string | undefined {
-		// First check for idle instances matching the role
-		const definitions = this._agentLaneService.getAgentDefinitions();
-		const matchingDef = definitions.find(d => d.role === role);
-
-		if (!matchingDef) {
-			this._logService.warn(`[Orchestrator] No agent definition for role: ${role}`);
-			return undefined;
-		}
-
-		// Check existing instances
-		const instances = this._agentLaneService.getAgentInstances();
-		const idleInstance = instances.find(
-			i => i.definitionId === matchingDef.id && i.state === AgentState.Idle
+	/**
+	 * Find a chat mode matching the requested role.
+	 * Returns the mode ID which can be used as an agent identifier.
+	 */
+	private _findAgentForRole(role: string): string | undefined {
+		const modes = this._chatModeService.getModes();
+		// Search custom agents for matching name/role
+		const matching = modes.custom.find(m =>
+			m.label.get().toLowerCase() === role.toLowerCase()
 		);
-
-		if (idleInstance) {
-			return idleInstance.id;
+		if (matching) {
+			return matching.id;
 		}
-
-		// Spawn new instance
-		try {
-			const newInstance = this._agentLaneService.spawnAgent(matchingDef.id);
-			return newInstance.id;
-		} catch (e) {
-			this._logService.warn(`[Orchestrator] Failed to spawn agent for role ${role}: ${e}`);
-			return undefined;
-		}
+		this._logService.warn(`[Orchestrator] No chat mode found for role: ${role}`);
+		return undefined;
 	}
 
 	private async _executeWithDependencies(tasks: MutableTask[]): Promise<void> {
@@ -283,16 +271,6 @@ export class OrchestratorServiceImpl extends Disposable implements IOrchestrator
 		task.status = 'in_progress';
 		this._onDidChangeTask.fire(task);
 
-		if (task.assignedAgentId) {
-			const instance = this._agentLaneService.getAgentInstance(task.assignedAgentId);
-			if (instance) {
-				// Assign task while in Idle, then transition: Idle → Queued → Running
-				this._agentLaneService.assignTask(task.assignedAgentId, task.id, task.description);
-				this._agentLaneService.transitionState(task.assignedAgentId, AgentState.Queued);
-				this._agentLaneService.transitionState(task.assignedAgentId, AgentState.Running);
-			}
-		}
-
 		const cts = new CancellationTokenSource();
 		const taskTimeout = this._configService.getValue<number>('multiAgent.taskTimeout') ?? 300_000;
 		const timeoutHandle = setTimeout(() => cts.cancel(), taskTimeout);
@@ -301,34 +279,22 @@ export class OrchestratorServiceImpl extends Disposable implements IOrchestrator
 			let result: string;
 
 			if (task.assignedAgentId) {
-				// Execute via chat bridge — real LLM call through provider rotation
+				// Execute via chat bridge — routes through provider rotation
 				result = await this._chatBridge.executeAgentTask(
 					task.assignedAgentId,
 					task.description,
 					cts.token,
 				);
 			} else {
-				// No agent assigned — skip execution
 				result = `No agent assigned for: ${task.description}`;
 			}
 
 			task.status = 'completed';
 			task.completedAt = Date.now();
 			task.result = result;
-
-			if (task.assignedAgentId) {
-				this._agentLaneService.completeTask(task.assignedAgentId, 'success', result);
-				this._agentLaneService.transitionState(task.assignedAgentId, AgentState.Done);
-				this._agentLaneService.transitionState(task.assignedAgentId, AgentState.Idle);
-			}
 		} catch (e) {
 			task.status = 'failed';
 			task.error = e instanceof Error ? e.message : String(e);
-
-			if (task.assignedAgentId) {
-				this._agentLaneService.completeTask(task.assignedAgentId, 'failure', task.error);
-				this._agentLaneService.transitionState(task.assignedAgentId, AgentState.Error);
-			}
 		} finally {
 			clearTimeout(timeoutHandle);
 			cts.dispose();
@@ -407,30 +373,22 @@ export class OrchestratorServiceImpl extends Disposable implements IOrchestrator
 		return text.trim();
 	}
 
-	/** Get or create a temporary orchestrator agent instance for decomposition calls */
+	/** Find a chat mode to use for decomposition LLM calls */
 	private _getOrCreateOrchestratorInstance(): string {
-		const instances = this._agentLaneService.getAgentInstances();
-		const existing = instances.find(i => {
-			const def = this._agentLaneService.getAgentDefinition(i.definitionId);
-			return def?.role === 'planner';
-		});
-		if (existing) {
-			return existing.id;
+		// Find planner mode from custom agents
+		const plannerMode = this._chatModeService.findModeByName('planner');
+		if (plannerMode) {
+			return plannerMode.id;
 		}
 
-		// Spawn a planner agent for decomposition
-		const plannerDef = this._agentLaneService.getAgentDefinitions().find(d => d.role === 'planner');
-		if (plannerDef) {
-			return this._agentLaneService.spawnAgent(plannerDef.id).id;
+		// Fallback: use first custom agent
+		const modes = this._chatModeService.getModes();
+		if (modes.custom.length > 0) {
+			return modes.custom[0].id;
 		}
 
-		// Fallback: use first available agent
-		const firstDef = this._agentLaneService.getAgentDefinitions()[0];
-		if (firstDef) {
-			return this._agentLaneService.spawnAgent(firstDef.id).id;
-		}
-
-		throw new Error('No agent definitions available for task decomposition');
+		// Last resort: use 'agent' built-in mode
+		return 'agent';
 	}
 
 	/**
